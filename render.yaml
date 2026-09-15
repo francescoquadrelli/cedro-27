@@ -1,17 +1,16 @@
 services:
   - type: web
-    name: MammaMia  
-    runtime: python  
-    buildCommand: pip install -r requirements.txt  
-    startCommand: python3 run.py  
-    plan: free 
+    name: cedro-27
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 run.py
+    plan: free
     region: frankfurt
+    healthCheckPath: /configure
     envVars:
-      # Sets a hardcoded value
-      # (DO NOT hardcode secrets in your Blueprint file!)
       - key: PORT
         value: 8080
-      # Prompts for a value in the Render Dashboard on creation
-      # (useful for secrets)
-      - key: TMDB_KEY
-        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.11
+    # Live TV does not require TMDB_KEY.
+    # For movies and series, add TMDB_KEY as a secret in the Render dashboard.
