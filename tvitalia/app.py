@@ -86,7 +86,8 @@ def meta_full(ch: Channel) -> dict:
 
 def stream_entry(ch: Channel, idx: int) -> dict:
     s = ch.streams[idx]
-    label = " · ".join(p for p in (s.quality, s.title) if p) or f"Sorgente {idx + 1}"
+    origin = "Ufficiale" if s.official else "Sorgente alternativa"
+    label = " · ".join(p for p in (origin, s.quality, s.title) if p)
     entry: dict = {"name": f"{ADDON_NAME}\n{s.quality or 'Live'}", "title": f"{ch.name}\n{label}", "url": s.url}
     headers = {k: v for k, v in (("Referer", s.referrer), ("User-Agent", s.user_agent)) if v}
     if headers:

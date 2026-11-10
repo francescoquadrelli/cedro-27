@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -79,6 +80,12 @@ LCN = {
     "sportitalia": 60,
 }
 
+# Streaming domains of Italian broadcasters: their own feeds are listed first.
+OFFICIAL_DOMAINS = (
+    "rai.it", "mediaset.net", "mediaset.it", "la7.it", "tv8.it", "nove.tv",
+    "discovery.com", "tv2000.it", "sportitalia.com", "supertennis.tv",
+)
+
 _QUALITY_RANK = {"2160p": 6, "1440p": 5, "1080p": 4, "720p": 3, "576p": 2, "480p": 1}
 
 
@@ -92,6 +99,20 @@ def is_pay_tv(name: str) -> bool:
     return bool(_PAY_TV.search(name)) and normalize(name) not in _PAY_TV_ALLOWED
 
 
+def _domain(url: str | None) -> str:
+    host = (urlsplit(url).hostname or "") if url else ""
+    return ".".join(host.split(".")[-2:])
+
+
+def is_official(url: str, website: str | None) -> bool:
+    """True when the stream is served by the broadcaster itself."""
+    host = urlsplit(url).hostname or ""
+    if any(host == d or host.endswith("." + d) for d in OFFICIAL_DOMAINS):
+        return True
+    site = _domain(website)
+    return bool(site) and (host == site or host.endswith("." + site))
+
+
 @dataclass
 class Stream:
     url: str
@@ -100,10 +121,11 @@ class Stream:
     referrer: str | None = None
     user_agent: str | None = None
     is_main_feed: bool = True
+    official: bool = False
 
     @property
-    def rank(self) -> tuple[int, int]:
-        return (int(self.is_main_feed), _QUALITY_RANK.get(self.quality or "", 0))
+    def rank(self) -> tuple[int, int, int]:
+        return (int(self.official), int(self.is_main_feed), _QUALITY_RANK.get(self.quality or "", 0))
 
 
 @dataclass
@@ -172,6 +194,7 @@ def build_channels(channels: list, streams: list, logos: list, feeds: list) -> d
             referrer=s.get("referrer"),
             user_agent=s.get("user_agent"),
             is_main_feed=feed is None or (ch.id, feed) in main_feeds,
+            official=is_official(s["url"], ch.website),
         ))
 
     # A channel without a working source is useless in Stremio.
