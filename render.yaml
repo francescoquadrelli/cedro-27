@@ -14,3 +14,17 @@ services:
         value: 3.11.11
     # Live TV does not require TMDB_KEY.
     # For movies and series, add TMDB_KEY as a secret in the Render dashboard.
+
+  # Clean addon: free Italian TV only (tvitalia/README.md)
+  - type: web
+    name: tv-italia
+    runtime: python
+    rootDir: tvitalia
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 app.py
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
