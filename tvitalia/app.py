@@ -12,7 +12,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import hashlib
+
+from fastapi.responses import Response
+
 from catalog import GENRE_ORDER, ID_PREFIX, Catalog, Channel
+from logos import TileCache
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 
@@ -22,7 +27,7 @@ ADDON_NAME = os.getenv("ADDON_NAME", "TV Italia")
 
 MANIFEST = {
     "id": "org.cedro27.tvitalia",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "name": ADDON_NAME,
     "description": "Tutta la TV italiana gratuita in diretta: canali nazionali, Rai, Mediaset, "
                    "sport, news, bambini e canali FAST. Solo fonti pubbliche e gratuite (iptv-org).",
@@ -43,6 +48,9 @@ MANIFEST = {
     "behaviorHints": {"configurable": False, "configurationRequired": False},
 }
 
+tiles = TileCache()
+# Render sets RENDER_EXTERNAL_URL; locally the request URL is used.
+PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
 catalog = Catalog(ttl=int(os.getenv("REFRESH_HOURS", "6")) * 3600)
 
 
@@ -62,22 +70,30 @@ def respond(data: dict, max_age: int = 3600) -> JSONResponse:
     return JSONResponse(data, headers={"Cache-Control": f"public, max-age={max_age}"})
 
 
-def meta_preview(ch: Channel) -> dict:
+def base_url(request: Request) -> str:
+    return PUBLIC_URL or str(request.base_url).rstrip("/")
+
+
+def tile_url(ch: Channel, base: str) -> str:
+    version = hashlib.sha1((ch.logo or ch.name).encode()).hexdigest()[:8]
+    return f"{base}/logo/{ch.id}.png?v={version}"
+
+
+def meta_preview(ch: Channel, base: str) -> dict:
     return {
         "id": ch.stremio_id,
         "type": "tv",
         "name": ch.name,
-        "poster": ch.logo,
+        "poster": tile_url(ch, base),
         "posterShape": "square",
         "logo": ch.logo,
         "genres": ch.genres,
     }
 
 
-def meta_full(ch: Channel) -> dict:
+def meta_full(ch: Channel, base: str) -> dict:
     details = [f"Canale {ch.lcn} del digitale terrestre" if ch.lcn else None, " · ".join(ch.genres)]
-    meta = meta_preview(ch) | {
-        "background": ch.logo,
+    meta = meta_preview(ch, base) | {
         "description": " — ".join(d for d in details if d),
         "website": ch.website,
     }
@@ -87,8 +103,9 @@ def meta_full(ch: Channel) -> dict:
 def stream_entry(ch: Channel, idx: int) -> dict:
     s = ch.streams[idx]
     origin = "Ufficiale" if s.official else "Sorgente alternativa"
-    label = " · ".join(p for p in (origin, s.quality, s.title) if p)
-    entry: dict = {"name": f"{ADDON_NAME}\n{s.quality or 'Live'}", "title": f"{ch.name}\n{label}", "url": s.url}
+    checked = "✓ verificata" if s.alive else None
+    label = " · ".join(p for p in (origin, s.label, checked) if p)
+    entry: dict = {"name": f"{ADDON_NAME}\n{s.label or 'Live'}", "title": f"{ch.name}\n{label}", "url": s.url}
     headers = {k: v for k, v in (("Referer", s.referrer), ("User-Agent", s.user_agent)) if v}
     if headers:
         # Custom headers need the native player; web players cannot set them.
@@ -120,7 +137,8 @@ code{{background:#8882;padding:2px 6px;border-radius:4px;word-break:break-all}}<
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "channels": len(catalog.channels), "updated_at": catalog.updated_at}
+    return {"status": "ok", "channels": len(catalog.channels), "updated_at": catalog.updated_at,
+            "streams_checked_at": catalog.probed_at}
 
 
 @app.get("/manifest.json")
@@ -128,9 +146,19 @@ async def manifest() -> JSONResponse:
     return respond(MANIFEST, max_age=86400)
 
 
+@app.get("/logo/{channel_id}.png")
+async def logo(channel_id: str) -> Response:
+    await catalog.ensure_fresh()
+    ch = catalog.channels.get(channel_id)
+    if ch is None:
+        raise HTTPException(404)
+    png = await tiles.get(ch.logo or ch.name, ch.logo, ch.name)
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.get("/catalog/{type}/{id}.json")
 @app.get("/catalog/{type}/{id}/{extra}.json")
-async def catalog_route(type: str, id: str, extra: str | None = None) -> JSONResponse:
+async def catalog_route(request: Request, type: str, id: str, extra: str | None = None) -> JSONResponse:
     if type != "tv" or id != CATALOG_ID:
         raise HTTPException(404)
     await catalog.ensure_fresh()
@@ -145,13 +173,14 @@ async def catalog_route(type: str, id: str, extra: str | None = None) -> JSONRes
     except ValueError:
         skip = 0
     page = items[skip: skip + PAGE_SIZE]
-    return respond({"metas": [meta_preview(c) for c in page]}, max_age=1800)
+    base = base_url(request)
+    return respond({"metas": [meta_preview(c, base) for c in page]}, max_age=1800)
 
 
 @app.get("/meta/{type}/{id}.json")
-async def meta_route(type: str, id: str) -> JSONResponse:
+async def meta_route(request: Request, type: str, id: str) -> JSONResponse:
     ch = await _channel(type, id)
-    return respond({"meta": meta_full(ch)})
+    return respond({"meta": meta_full(ch, base_url(request))})
 
 
 @app.get("/stream/{type}/{id}.json")

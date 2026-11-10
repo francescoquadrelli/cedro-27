@@ -122,10 +122,35 @@ class Stream:
     user_agent: str | None = None
     is_main_feed: bool = True
     official: bool = False
+    # Filled in by the prober (probe.py).
+    alive: bool | None = None
+    height: int | None = None
+    latency: float | None = None
 
     @property
-    def rank(self) -> tuple[int, int, int]:
-        return (int(self.official), int(self.is_main_feed), _QUALITY_RANK.get(self.quality or "", 0))
+    def effective_height(self) -> int:
+        if self.height:
+            return self.height
+        m = re.match(r"(\d+)p", self.quality or "")
+        return int(m.group(1)) if m else 0
+
+    @property
+    def label(self) -> str | None:
+        h = self.effective_height
+        if not h:
+            return None
+        return "4K" if h >= 2000 else "Full HD" if h >= 1000 else "HD" if h >= 700 else f"{h}p"
+
+    @property
+    def rank(self) -> tuple:
+        return (
+            self.alive is not False,
+            self.official,
+            self.alive is True,
+            self.effective_height,
+            self.is_main_feed,
+            -(self.latency or 99),
+        )
 
 
 @dataclass
@@ -204,6 +229,35 @@ def build_channels(channels: list, streams: list, logos: list, feeds: list) -> d
     return result
 
 
+MAX_STREAMS = 5
+
+
+def apply_probes(channels: dict[str, Channel], results: dict) -> dict[str, Channel]:
+    """Annotate streams with probe results, drop dead or poor sources, re-rank.
+
+    A channel disappears only when every one of its sources is confirmed dead.
+    """
+    out: dict[str, Channel] = {}
+    for cid, ch in channels.items():
+        streams = []
+        for s in ch.streams:
+            r = results.get(s.url)
+            if r is not None:
+                s.alive, s.height, s.latency = r.alive, r.height or s.height, r.latency
+            streams.append(s)
+        live = [s for s in streams if s.alive is not False]
+        if not live:
+            continue
+        best = max(s.effective_height for s in live if s.alive is True) if any(s.alive for s in live) else 0
+        if best >= 720:
+            # A good working source exists: hide low-resolution third-party copies.
+            live = [s for s in live if s.official or not s.effective_height or s.effective_height >= 480]
+        live.sort(key=lambda s: s.rank, reverse=True)
+        ch.streams = live[:MAX_STREAMS]
+        out[cid] = ch
+    return out
+
+
 class Catalog:
     """In-memory catalogue refreshed from iptv-org every `ttl` seconds.
 
@@ -217,6 +271,8 @@ class Catalog:
         self.channels: dict[str, Channel] = {}
         self.updated_at = 0.0
         self._lock = asyncio.Lock()
+        self._probe_task: asyncio.Task | None = None
+        self.probed_at = 0.0
 
     @property
     def stale(self) -> bool:
@@ -236,13 +292,28 @@ class Catalog:
                     data = await asyncio.gather(*(
                         self._fetch(client, n) for n in ("channels", "streams", "logos", "feeds")
                     ))
-                self.channels = build_channels(*data)
+                fresh = build_channels(*data)
+                if not self.channels:
+                    self.channels = fresh  # serve something right away on cold start
                 self.updated_at = time.time()
-                log.info("Catalogue updated: %d channels", len(self.channels))
+                log.info("Catalogue updated: %d channels, checking streams…", len(fresh))
+                self._probe_task = asyncio.create_task(self._probe(fresh))
             except Exception:
                 log.exception("Catalogue refresh failed; keeping %d cached channels", len(self.channels))
                 # Retry in 5 minutes rather than on every request.
                 self.updated_at = time.time() - self.ttl + 300
+
+    async def _probe(self, fresh: dict[str, Channel]) -> None:
+        from probe import probe_all
+
+        try:
+            results = await probe_all([s for ch in fresh.values() for s in ch.streams])
+            self.channels = apply_probes(fresh, results)
+            self.probed_at = time.time()
+            log.info("Streams checked: %d channels with working sources", len(self.channels))
+        except Exception:
+            log.exception("Stream check failed; serving unchecked catalogue")
+            self.channels = fresh
 
     async def ensure_fresh(self) -> None:
         if not self.channels:
