@@ -69,5 +69,7 @@ def test_apply_probes_ranks_real_quality_and_drops_dead_and_poor():
 def test_apply_probes_keeps_unknown_and_hides_all_dead_channel():
     geo = Stream(url="https://rai.it/geo", official=True)
     assert apply_probes(_ch(geo), {"https://rai.it/geo": ProbeResult(alive=None)})["c"].streams == [geo]
+    off = Stream(url="https://rai.it/404", official=True)
+    assert apply_probes(_ch(off), {"https://rai.it/404": ProbeResult(alive=False)})["c"].streams == [off]
     gone = Stream(url="https://x.test/gone")
     assert apply_probes(_ch(gone), {"https://x.test/gone": ProbeResult(alive=False)}) == {}

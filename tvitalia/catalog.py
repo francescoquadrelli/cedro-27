@@ -84,6 +84,8 @@ LCN = {
 OFFICIAL_DOMAINS = (
     "rai.it", "mediaset.net", "mediaset.it", "la7.it", "tv8.it", "nove.tv",
     "discovery.com", "tv2000.it", "sportitalia.com", "supertennis.tv",
+    # Licensed FAST distribution platforms (Samsung TV Plus, Rakuten TV, Pluto TV…)
+    "amagi.tv", "wurl.tv", "wurl.com", "pluto.tv", "rakuten.tv",
 )
 
 _QUALITY_RANK = {"2160p": 6, "1440p": 5, "1080p": 4, "720p": 3, "576p": 2, "480p": 1}
@@ -144,8 +146,8 @@ class Stream:
     @property
     def rank(self) -> tuple:
         return (
-            self.alive is not False,
             self.official,
+            self.alive is not False,
             self.alive is True,
             self.effective_height,
             self.is_main_feed,
@@ -245,7 +247,8 @@ def apply_probes(channels: dict[str, Channel], results: dict) -> dict[str, Chann
             if r is not None:
                 s.alive, s.height, s.latency = r.alive, r.height or s.height, r.latency
             streams.append(s)
-        live = [s for s in streams if s.alive is not False]
+        # Official feeds are never dropped: they can look dead from abroad (geo-blocks).
+        live = [s for s in streams if s.alive is not False or s.official]
         if not live:
             continue
         best = max(s.effective_height for s in live if s.alive is True) if any(s.alive for s in live) else 0

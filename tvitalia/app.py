@@ -152,8 +152,9 @@ async def logo(channel_id: str) -> Response:
     ch = catalog.channels.get(channel_id)
     if ch is None:
         raise HTTPException(404)
-    png = await tiles.get(ch.logo or ch.name, ch.logo, ch.name)
-    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
+    png, real = await tiles.get(ch.logo or ch.name, ch.logo, ch.name)
+    max_age = 604800 if real else 3600  # retry soon if only a placeholder was possible
+    return Response(png, media_type="image/png", headers={"Cache-Control": f"public, max-age={max_age}"})
 
 
 @app.get("/catalog/{type}/{id}.json")

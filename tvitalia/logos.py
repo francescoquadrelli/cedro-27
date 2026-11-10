@@ -16,6 +16,9 @@ MARGIN = 0.14          # free space on each side
 LIGHT_BG = (244, 244, 246)
 DARK_BG = (30, 30, 36)
 _MAX_CACHE = 600
+# Wikimedia (most logos) refuses generic browser user agents from servers and
+# asks clients to identify themselves.
+USER_AGENT = "TVItaliaStremioAddon/1.1 (+https://github.com/francescoquadrelli/cedro-27)"
 
 
 def _luminance(img: Image.Image) -> float | None:
@@ -81,21 +84,24 @@ class TileCache:
     def __init__(self) -> None:
         self._cache: dict[str, bytes] = {}
 
-    async def get(self, key: str, logo_url: str | None, name: str) -> bytes:
+    async def get(self, key: str, logo_url: str | None, name: str) -> tuple[bytes, bool]:
+        """-> (png, is_real_logo). Placeholders are not cached, so a temporary
+        failure is retried on the next request."""
         if key in self._cache:
-            return self._cache[key]
+            return self._cache[key], True
         tile = None
         if logo_url:
             try:
                 async with httpx.AsyncClient(timeout=15, follow_redirects=True,
-                                             headers={"User-Agent": "Mozilla/5.0"}) as client:
+                                             headers={"User-Agent": USER_AGENT}) as client:
                     r = await client.get(logo_url)
                     r.raise_for_status()
                 tile = render_tile(r.content)
             except Exception as exc:  # unreachable, SVG or broken image
                 log.info("Logo for %s not usable (%s): using placeholder", name, exc)
-        tile = tile or placeholder_tile(name)
+        if tile is None:
+            return placeholder_tile(name), False
         if len(self._cache) >= _MAX_CACHE:
             self._cache.pop(next(iter(self._cache)))
         self._cache[key] = tile
-        return tile
+        return tile, True

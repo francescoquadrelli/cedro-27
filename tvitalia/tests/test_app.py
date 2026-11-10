@@ -115,13 +115,14 @@ def test_logo_tile_and_poster_url(client, monkeypatch):
     from logos import placeholder_tile
 
     async def fake_get(key, url, name):
-        return placeholder_tile(name)
+        return placeholder_tile(name), False
 
     monkeypatch.setattr(addon.tiles, "get", fake_get)
     meta = client.get("/catalog/tv/tvitalia.json").json()["metas"][0]
     assert "/logo/Rai1.it.png?v=" in meta["poster"] and meta["posterShape"] == "square"
     r = client.get("/logo/Rai1.it.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.headers["cache-control"] == "public, max-age=3600"
     assert client.get("/logo/Nope.png").status_code == 404
 
 
